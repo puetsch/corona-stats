@@ -1,0 +1,833 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.msg_handler(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      var msg = msg.metadata;
+      var comm_id = msg.comm_id;
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg.traceback)
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.msg_handler = function(msg) {
+  var metadata = msg.metadata;
+  if ((metadata.msg_type == "Ready")) {
+    if (metadata.content) {
+      console.log("Python callback returned following output:", metadata.content);
+    }
+	return;
+  } else if (metadata.msg_type == "Error") {
+    console.log("Python failed with the following traceback:", metadata.traceback)
+    return
+  }
+  this.process_msg(msg)
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(frame);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.wait = true;
+    this.dynamic_update(frame)
+  } else {
+    this.update(frame)
+  }
+}
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+  window.PyViz = window.HoloViews
+} else if (window.PyViz === undefined) {
+  window.PyViz = window.HoloViews
+}
+
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        window.PyViz.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.PyViz.comms) {
+        return window.PyViz.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        var comm = window.PyViz.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+
+      window.PyViz.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.PyViz.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+
+
+
+
+
+  <div class="bk-root" id="90181d90-555f-43a8-8d2b-face844f29e7" data-root-id="65410"></div>
+
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"b37a97d3-fb67-4d9d-9ce8-3b10af3a601e":{"roots":{"references":[{"attributes":{"align":null,"below":[{"id":"65419","type":"DatetimeAxis"}],"center":[{"id":"65423","type":"Grid"},{"id":"65428","type":"Grid"},{"id":"65474","type":"Legend"}],"left":[{"id":"65424","type":"LogAxis"}],"margin":null,"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":500,"plot_width":800,"renderers":[{"id":"65455","type":"GlyphRenderer"},{"id":"65482","type":"GlyphRenderer"},{"id":"65510","type":"GlyphRenderer"},{"id":"65540","type":"GlyphRenderer"},{"id":"65572","type":"GlyphRenderer"},{"id":"65606","type":"GlyphRenderer"},{"id":"65642","type":"GlyphRenderer"},{"id":"65680","type":"GlyphRenderer"},{"id":"65720","type":"GlyphRenderer"},{"id":"65762","type":"GlyphRenderer"},{"id":"65806","type":"GlyphRenderer"},{"id":"65852","type":"GlyphRenderer"},{"id":"65900","type":"GlyphRenderer"},{"id":"65950","type":"GlyphRenderer"},{"id":"66002","type":"GlyphRenderer"},{"id":"66056","type":"GlyphRenderer"},{"id":"66112","type":"GlyphRenderer"}],"sizing_mode":"fixed","title":{"id":"65411","type":"Title"},"toolbar":{"id":"65434","type":"Toolbar"},"x_range":{"id":"65391","type":"Range1d"},"x_scale":{"id":"65415","type":"LinearScale"},"y_range":{"id":"65392","type":"Range1d"},"y_scale":{"id":"65417","type":"LogScale"}},"id":"65410","subtype":"Figure","type":"Plot"},{"attributes":{"line_alpha":0.2,"line_color":"#b2df8a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65509","type":"Line"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmksI/57SmpyaSwj/ntKanJpLCP+e0pqcmktI/57SmpyaS0j/ntKanJpLSP1oPevs52+s/Wg96+znb6z+9OIUm9YgJQL04hSb1iAlADKT/kBeyKkCGdNtg8ZArQEVR6TqhVi9A1jEaJXHYMUAJu7+skQU0QMiXzYZByzdAa5IGfu+UPEAZ7IfV6aA/QA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA","United States: MA"]},"selected":{"id":"65801","type":"Selection"},"selection_policy":{"id":"65879","type":"UnionRenderers"}},"id":"65800","type":"ColumnDataSource"},{"attributes":{},"id":"65535","type":"Selection"},{"attributes":{"callback":null,"end":1584403200000.0,"reset_end":1584403200000.0,"reset_start":1579651200000.0,"start":1579651200000.0,"tags":[[["dt","dt",null]]]},"id":"65391","type":"Range1d"},{"attributes":{"source":{"id":"65714","type":"ColumnDataSource"}},"id":"65721","type":"CDSView"},{"attributes":{},"id":"65450","type":"Selection"},{"attributes":{"line_alpha":0.2,"line_color":"#cab2d6","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65719","type":"Line"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+uAiIOaLJP/64CIg5osk//rgIiDmi+T+H0EbyvAYEQMb+SFRLbwpAMzmnpFc6FUDi2yhuwggaQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI","United States: MI"]},"selected":{"id":"65847","type":"Selection"},"selection_policy":{"id":"65929","type":"UnionRenderers"}},"id":"65846","type":"ColumnDataSource"},{"attributes":{},"id":"65945","type":"Selection"},{"attributes":{"days":[1,8,15,22]},"id":"65466","type":"DaysTicker"},{"attributes":{"source":{"id":"65534","type":"ColumnDataSource"}},"id":"65541","type":"CDSView"},{"attributes":{},"id":"65601","type":"Selection"},{"attributes":{"line_color":"#a6cee3","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65452","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#e31a1c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65604","type":"Line"},{"attributes":{},"id":"65741","type":"UnionRenderers"},{"attributes":{"data_source":{"id":"65449","type":"ColumnDataSource"},"glyph":{"id":"65452","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65454","type":"Line"},"nonselection_glyph":{"id":"65453","type":"Line"},"selection_glyph":null,"view":{"id":"65456","type":"CDSView"}},"id":"65455","type":"GlyphRenderer"},{"attributes":{},"id":"65785","type":"UnionRenderers"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAyaTXxhoYg/DJpNfGGhqD8Mmk18YaGoPwyaTXxhoag/jwBh27nJrj8Mmk18YaG4P48AYdu5yb4/iTM6HQl5wj+JMzodCXnCP4kzOh0JecI/iTM6HQl5wj8qDf80HwPEPyoN/zQfA8Q/y+bDTDWNxT/L5sNMNY3FPwyaTXxhocg/DJpNfGGhyD8Mmk18YaHIPwyaTXxhocg/DJpNfGGhyD8Mmk18YaHIPwyaTXxhocg/DJpNfGGhyD8Mmk18YaHIPwyaTXxhocg/DJpNfGGhyD8Mmk18YaHIPwyaTXxhocg/DJpNfGGhyD+tcxKUdyvKP/p54UAqyNQ/ucZXEf6z4T+JMzodCXniPyfKb1U0Z+4/dNA+AucD+T9bZWgYd5j+P/FpK6OO2wJAqWs3xSk1CUAGDgXG7C8XQEvG1EiXHSBA84y90Os3I0B00D4C5wMpQOoewfRVSSxAOLWOes+FMUAETE5SWfI2QA6936m+/ThAJ+A2J0sZRkDAnbSvJZJLQDGFBg5pbFFA/+KXyUHdVUC7kL5wHNVbQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total"]},"selected":{"id":"65535","type":"Selection"},"selection_policy":{"id":"65585","type":"UnionRenderers"}},"id":"65534","type":"ColumnDataSource"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACINjXOr1GqP4g2Nc6vUbo/fpXE3SgY4j8yPzZcturyP9SMw08if/k/wjDfxABBD0ApEcSWpcsVQH8IwwifMh1A2vVZzjPJIUDdujUVM54mQO8WGqBU3DBAV8EODyukNUBqkPHEwvw6QPsJaKxk0EJAP8D6xKPaSECt04Wyi+xVQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY"]},"selected":{"id":"65945","type":"Selection"},"selection_policy":{"id":"66035","type":"UnionRenderers"}},"id":"65944","type":"ColumnDataSource"},{"attributes":{"source":{"id":"65756","type":"ColumnDataSource"}},"id":"65763","type":"CDSView"},{"attributes":{"label":{"value":"Spain: total"},"renderers":[{"id":"65680","type":"GlyphRenderer"}]},"id":"65713","type":"LegendItem"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"rgZ1LWwXHkCuBnUtbBceQOP4ncWWmiJAvkdTwLHJKUBCE06kFu0xQJ0iR9RHHDhAn5+wlMIbTkCfn7CUwhtOQBCLm8m0xFRAbKlpUuaXWEA0GA+ejkxeQEYNISUMrGdABIw+GXujbECP3UqXUKlxQK31kP8S03RAC6S7S3Fqd0CU6AFGn2x6QE8jj4KpsnxAnbSybM1gf0C02FLTpMyAQFt9jZerqoFAW32Nl6uqgUCay8MZMYaJQN3LHruVzoxASzyvBGbIjUDeSpdQac6OQDyvBGZYw49AYeHW1WlUkEBi38cAEWyQQIyZut/rh5BASHeX4tSWkEBvpUuoNPeQQG+lS6g095BAi668t/YEkUAAW6FkyCaRQEXFcsP1QZFAqKIr761dkUCVwhtAO3ORQGypaVLmj5FAjXPU2Ye2kUDv9/p10MORQFwg3V2Ky5FALDdcn1XTkUBl/4CHatyRQH9UvqL05JFAVT0bivjpkUBPaz3kv+yRQFfxTn4w75FA98W6cVfwkUAI4bL+OPGRQCZUmsvD8ZFAGfyqixrykUCotR7yX/KRQDdvklil8pFAxigGv+rykUAqF6MY/PKRQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei"]},"selected":{"id":"65450","type":"Selection"},"selection_policy":{"id":"65489","type":"UnionRenderers"}},"id":"65449","type":"ColumnDataSource"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABsJ4uqpL2VP2wni6qkvZU/bCeLqqS9lT9sJ4uqpL2VP2wni6qkvZU/bCeLqqS9lT9sJ4uqpL2VP2wni6qkvZU/bCeLqqS9pT9sJ4uqpL2lP2wni6qkvaU/bCeLqqS9pT9sJ4uqpL2lP2wni6qkvaU/bCeLqqS9pT9sJ4uqpL2lP2wni6qkvaU/bCeLqqS9pT9sJ4uqpL2lP2wni6qkvaU/bCeLqqS9pT9sJ4uqpL2lP2wni6qkvaU/bCeLqqS9pT+RXeh/O07APwgQkcoVqtE/9XTiX8ph1D9sJ4uqpL3lP3Cv04+vku4/vqPWH+iI/D/1dOJfymEEQNFg10N2BgxAMKzky3TaEkDiyIqY3f4VQM22PKUo/CBAgOSLzjI7JUBS6SvyxpMsQA9QtMv3xzZAQeulqFT+QUC19hw0+StIQLX2HDT5K0hAW7/XVT3FW0Cpv+xOC/ZgQBdWF6/1sWRAaMG5x5diakDpzhLFli1vQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total"]},"selected":{"id":"65675","type":"Selection"},"selection_policy":{"id":"65741","type":"UnionRenderers"}},"id":"65674","type":"ColumnDataSource"},{"attributes":{"callback":null,"renderers":[{"id":"65455","type":"GlyphRenderer"},{"id":"65482","type":"GlyphRenderer"},{"id":"65510","type":"GlyphRenderer"},{"id":"65540","type":"GlyphRenderer"},{"id":"65572","type":"GlyphRenderer"},{"id":"65606","type":"GlyphRenderer"},{"id":"65642","type":"GlyphRenderer"},{"id":"65680","type":"GlyphRenderer"},{"id":"65720","type":"GlyphRenderer"},{"id":"65762","type":"GlyphRenderer"},{"id":"65806","type":"GlyphRenderer"},{"id":"65852","type":"GlyphRenderer"},{"id":"65900","type":"GlyphRenderer"},{"id":"65950","type":"GlyphRenderer"},{"id":"66002","type":"GlyphRenderer"},{"id":"66056","type":"GlyphRenderer"},{"id":"66112","type":"GlyphRenderer"}],"tags":["hv_created"],"tooltips":[["label","@{label}"],["dt","@{dt_dt_strings}"],["confirmed_per_mn","@{confirmed_per_mn}"]]},"id":"65393","type":"HoverTool"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjptZKXNLMP6Om1kpc0sw/o6bWSlzS3D8mKMaueQPiPyYoxq55A+I/ODwphjYF+z/FR8pVMrcEQAOH0qOjHgpAA4fSo6MeCkCna6+AyxIfQJRXTKkOESZA3T8JLEQKNEDM3w1CZg8+QA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ","United States: NJ"]},"selected":{"id":"65895","type":"Selection"},"selection_policy":{"id":"65981","type":"UnionRenderers"}},"id":"65894","type":"ColumnDataSource"},{"attributes":{},"id":"65757","type":"Selection"},{"attributes":{"line_alpha":0.1,"line_color":"#33a02c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65538","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#a6cee3","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65454","type":"Line"},{"attributes":{},"id":"65551","type":"UnionRenderers"},{"attributes":{},"id":"65637","type":"Selection"},{"attributes":{"line_alpha":0.1,"line_color":"#cab2d6","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65718","type":"Line"},{"attributes":{},"id":"66051","type":"Selection"},{"attributes":{"data_source":{"id":"65756","type":"ColumnDataSource"},"glyph":{"id":"65759","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65761","type":"Line"},"nonselection_glyph":{"id":"65760","type":"Line"},"selection_glyph":null,"view":{"id":"65763","type":"CDSView"}},"id":"65762","type":"GlyphRenderer"},{"attributes":{},"id":"66035","type":"UnionRenderers"},{"attributes":{"months":[0,2,4,6,8,10]},"id":"65469","type":"MonthsTicker"},{"attributes":{"label":{"value":"United States: CA"},"renderers":[{"id":"65720","type":"GlyphRenderer"}]},"id":"65755","type":"LegendItem"},{"attributes":{"line_alpha":0.1,"line_color":"#a6cee3","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65453","type":"Line"},{"attributes":{"mantissas":[1,2,5],"max_interval":500.0,"num_minor_ticks":0},"id":"65461","type":"AdaptiveTicker"},{"attributes":{},"id":"65801","type":"Selection"},{"attributes":{"line_alpha":0.1,"line_color":"#b2df8a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65508","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#6a3d9a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65761","type":"Line"},{"attributes":{"months":[0,6]},"id":"65471","type":"MonthsTicker"},{"attributes":{"click_policy":"mute","items":[{"id":"65475","type":"LegendItem"},{"id":"65503","type":"LegendItem"},{"id":"65533","type":"LegendItem"},{"id":"65565","type":"LegendItem"},{"id":"65599","type":"LegendItem"},{"id":"65635","type":"LegendItem"},{"id":"65673","type":"LegendItem"},{"id":"65713","type":"LegendItem"},{"id":"65755","type":"LegendItem"},{"id":"65799","type":"LegendItem"},{"id":"65845","type":"LegendItem"},{"id":"65893","type":"LegendItem"},{"id":"65943","type":"LegendItem"},{"id":"65995","type":"LegendItem"},{"id":"66049","type":"LegendItem"},{"id":"66105","type":"LegendItem"},{"id":"66163","type":"LegendItem"}],"location":"top_left"},"id":"65474","type":"Legend"},{"attributes":{"line_alpha":0.1,"line_color":"#6a3d9a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65760","type":"Line"},{"attributes":{"base":60,"mantissas":[1,2,5,10,15,20,30],"max_interval":1800000.0,"min_interval":1000.0,"num_minor_ticks":0},"id":"65462","type":"AdaptiveTicker"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"ZPPr0pfGkz9k8+vSl8aTP2Tz69KXxqM/ZPPr0pfGoz8W7WG846mtP2Tz69KXxrM/ZPPr0pfGsz9k8+vSl8azP2Tz69KXxrM/qW4EwhAxyz8W7WG846nNPy40vVUuitI/LjS9VS6K0j9k8+vSl8bTPwcxeErUe9c/4C0zP3pt3D8W7WG846ndPxbtYbzjqd0/TKyQOU3m3j9cFfcZkK/gP/d0jtjETeE/93SO2MRN4T/3dI7YxE3hP/d0jtjETeE/93SO2MRN4T+S1CWX+evhPy40vVUuiuI/yZNUFGMo4z/Jk1QUYyjjP8G1X1tbEQBA5wso+IGED0BWi+Blc7kgQCxt/4KAQCdAvnBUAU0WMED4nv1aOt4yQHkPfXZOWjhAIPYga38NQUAcf4///ZBGQJtpqgS0ak5AgDbieqMJUkDnl8pO/u1UQIn97PnQCVlAcmyjOXgjW0BCs/+orGRdQHTq8MDY1F9AiVwBrkj/YEB+yUDt/qdhQL3CWbdYDWJAz3Ro7fkiYkAwjZPJh7hiQMP1ckb7/mJA2ABY8PVCY0DORQH8FYVjQDA2lqQNtGNA0/et48jhY0AxozcyshVkQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total"]},"selected":{"id":"65637","type":"Selection"},"selection_policy":{"id":"65699","type":"UnionRenderers"}},"id":"65636","type":"ColumnDataSource"},{"attributes":{},"id":"65472","type":"YearsTicker"},{"attributes":{"source":{"id":"65504","type":"ColumnDataSource"}},"id":"65511","type":"CDSView"},{"attributes":{"source":{"id":"65566","type":"ColumnDataSource"}},"id":"65573","type":"CDSView"},{"attributes":{"label":{"value":"United States: LA"},"renderers":[{"id":"65762","type":"GlyphRenderer"}]},"id":"65799","type":"LegendItem"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"65473","type":"BoxAnnotation"},{"attributes":{"data_source":{"id":"65534","type":"ColumnDataSource"},"glyph":{"id":"65537","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65539","type":"Line"},"nonselection_glyph":{"id":"65538","type":"Line"},"selection_glyph":null,"view":{"id":"65541","type":"CDSView"}},"id":"65540","type":"GlyphRenderer"},{"attributes":{"label":{"value":"Iran: total"},"renderers":[{"id":"65572","type":"GlyphRenderer"}]},"id":"65599","type":"LegendItem"},{"attributes":{"days":[1,15]},"id":"65467","type":"DaysTicker"},{"attributes":{"data_source":{"id":"65566","type":"ColumnDataSource"},"glyph":{"id":"65569","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65571","type":"Line"},"nonselection_glyph":{"id":"65570","type":"Line"},"selection_glyph":null,"view":{"id":"65573","type":"CDSView"}},"id":"65572","type":"GlyphRenderer"},{"attributes":{"label":{"value":"China: Hubei"},"renderers":[{"id":"65455","type":"GlyphRenderer"}]},"id":"65475","type":"LegendItem"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAiIma+2n/oD+IiZr7af+gP4iJmvtp/6A/iIma+2n/oD+IiZr7af+gP4iJmvtp/6A/iIma+2n/oD9Mzmf5Hn+pP0zOZ/kef6k/TM5n+R5/qT9Mzmf5Hn+pP0zOZ/kef6k/TM5n+R5/qT9Mzmf5Hn+pP0zOZ/kef6k/TM5n+R5/qT9Mzmf5Hn+pP0zOZ/kef6k/TM5n+R5/qT9Mzmf5Hn+pP0zOZ/kef6k/6iuBekQ/1T88tb2rbnfwP4sirVZKlQRADXoinPNoDkD9YHhOQ2EVQF11OIr2Ex5A8TJgFcC+JUCIBmDQ+3otQIA7KL9auTJAhCa604cePEC6IaHc6uVAQIULIboIxERAsHaeuj2jSUDK7huzkgJQQCophjQWPVNAaIWPiNhpWEABkHXj4ZpeQDzmUwn4B2NAc6wdJe4OZUCY5q/Ji9tpQJjmr8mL22lAnuKiTE5SckChqppHEvN1QDMPlGiJrHlAv/ldzi8HfUDk4a3C01eAQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total"]},"selected":{"id":"65601","type":"Selection"},"selection_policy":{"id":"65659","type":"UnionRenderers"}},"id":"65600","type":"ColumnDataSource"},{"attributes":{"months":[0,4,8]},"id":"65470","type":"MonthsTicker"},{"attributes":{"data_source":{"id":"65800","type":"ColumnDataSource"},"glyph":{"id":"65803","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65805","type":"Line"},"nonselection_glyph":{"id":"65804","type":"Line"},"selection_glyph":null,"view":{"id":"65807","type":"CDSView"}},"id":"65806","type":"GlyphRenderer"},{"attributes":{"line_alpha":0.1,"line_color":"#fb9a99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65570","type":"Line"},{"attributes":{"days":[1,4,7,10,13,16,19,22,25,28]},"id":"65465","type":"DaysTicker"},{"attributes":{"source":{"id":"65600","type":"ColumnDataSource"}},"id":"65607","type":"CDSView"},{"attributes":{"source":{"id":"65800","type":"ColumnDataSource"}},"id":"65807","type":"CDSView"},{"attributes":{"days":["%F"]},"id":"65443","type":"DatetimeTickFormatter"},{"attributes":{"months":[0,1,2,3,4,5,6,7,8,9,10,11]},"id":"65468","type":"MonthsTicker"},{"attributes":{"line_color":"#e31a1c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65603","type":"Line"},{"attributes":{"line_color":"#6a3d9a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65759","type":"Line"},{"attributes":{"label":{"value":"China: total"},"renderers":[{"id":"65482","type":"GlyphRenderer"}]},"id":"65503","type":"LegendItem"},{"attributes":{"days":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]},"id":"65464","type":"DaysTicker"},{"attributes":{"line_alpha":0.2,"line_color":"#ffff99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65805","type":"Line"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"KcEZwDQF2T/VkW79mFvdP8M1jQCiAOU/EwTt4nIM8D9IxMuEUq/3P8PmEJ5qawBAeJ7VteBwD0ABxy8Nrl4RQBYrzWYrOxdAiPfEhJD4G0CieNiqT/cgQCJy7bdHuidAKxqpQ3khLEBSX+4qnekwQM+SKlhfkzNA+T0EEhzSNUD9kEoMhFU4QF/FngxZQzpARCX7VfppPEBmecR9Hjc+QOBFbEE5qj9A1nFKP1juP0A8FApRUV1FQAlh5rJ8q0dAMiKHviNnSECMhFS95iZJQMZ23E9R1klAlssIpZV4SkBFtOFS151KQGSlCNapx0pAP8yT/9rySkCR1deJWndLQDGHynJFeUtARDEb8ESNS0ARkrEqHbxLQFnNPlq84UtA584r010JTECwQ+5eUSdMQFnJTJVmTkxABT+7iv+CTEBds6dhoJVMQHXI6nYKoUxAjN0tjHSsTECCC4VsPrpMQMRitg03yExAqtbML4XPTEAMHWImXNRMQA0ZJha910xAkUanQTTaTECgBCQQT91MQMPn0zRQ3kxAMvRdGoDfTED0iAAobOJMQNKhFPPL5ExASA3dP4nnTECAEYSq0elMQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total","China: total"]},"selected":{"id":"65477","type":"Selection"},"selection_policy":{"id":"65519","type":"UnionRenderers"}},"id":"65476","type":"ColumnDataSource"},{"attributes":{},"id":"65489","type":"UnionRenderers"},{"attributes":{},"id":"65699","type":"UnionRenderers"},{"attributes":{"line_alpha":0.1,"line_color":"#ffff99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65804","type":"Line"},{"attributes":{"source":{"id":"65449","type":"ColumnDataSource"}},"id":"65456","type":"CDSView"},{"attributes":{},"id":"65831","type":"UnionRenderers"},{"attributes":{"line_color":"#ffff99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65803","type":"Line"},{"attributes":{},"id":"65505","type":"Selection"},{"attributes":{"data_source":{"id":"65996","type":"ColumnDataSource"},"glyph":{"id":"65999","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"66001","type":"Line"},"nonselection_glyph":{"id":"66000","type":"Line"},"selection_glyph":null,"view":{"id":"66003","type":"CDSView"}},"id":"66002","type":"GlyphRenderer"},{"attributes":{"line_color":"#b2df8a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65507","type":"Line"},{"attributes":{},"id":"65847","type":"Selection"},{"attributes":{"line_alpha":0.2,"line_color":"#b2df8a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66001","type":"Line"},{"attributes":{"data_source":{"id":"65504","type":"ColumnDataSource"},"glyph":{"id":"65507","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65509","type":"Line"},"nonselection_glyph":{"id":"65508","type":"Line"},"selection_glyph":null,"view":{"id":"65511","type":"CDSView"}},"id":"65510","type":"GlyphRenderer"},{"attributes":{"format":"%d"},"id":"65441","type":"PrintfTickFormatter"},{"attributes":{"source":{"id":"65996","type":"ColumnDataSource"}},"id":"66003","type":"CDSView"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACe85UDgeqpP57zlQOB6qk/nvOVA4HqqT+e85UDgeqpP57zlQOB6qk/tnawwuBvsz+2drDC4G+zP7Z2sMLgb7M/tnawwuBvwz+2drDC4G/DP7Z2sMLgb8M/tnawwuBvwz+2drDC4G/DP7Z2sMLgb8M/tnawwuBvwz+2drDC4G/DPyo1I+MwrcY/KjUj4zCtxj+e85UDgerJP57zlQOB6sk/nvOVA4HqyT+e85UDgerJP57zlQOB6sk/nvOVA4HqyT+e85UDgerJP57zlQOB6sk/Q7g9opAy0D9DuD2ikDLQP0O4PaKQMtA/Q7g9opAy0D9DuD2ikDLQP0O4PaKQMtA/fBd3sjjR0T98F3eyONHRP7Z2sMLgb9M/tnawwuBv0z/gZ1qq5AHhP1Mmzco0P+Q/dQLsG31Y7D8iftvO3qb0P5U8Tu8u5Pc/KuREpGVmAEDPSqnACzwDQDtS1MwJcwRAErIIJNEnDUBwrXozI+sRQE9zGGBxXxZAXC7zHVKMHEDHk2GsuTUhQLLD+1cdkCVAh6FmWp0xLECPtvHwWKoxQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA"]},"selected":{"id":"65715","type":"Selection"},"selection_policy":{"id":"65785","type":"UnionRenderers"}},"id":"65714","type":"ColumnDataSource"},{"attributes":{"label":{"value":"United States: TX"},"renderers":[{"id":"66002","type":"GlyphRenderer"}]},"id":"66049","type":"LegendItem"},{"attributes":{"line_alpha":0.1,"line_color":"#b2df8a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66000","type":"Line"},{"attributes":{"label":{"value":"United States: MA"},"renderers":[{"id":"65806","type":"GlyphRenderer"}]},"id":"65845","type":"LegendItem"},{"attributes":{"line_color":"#b15928","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65849","type":"Line"},{"attributes":{"data_source":{"id":"65714","type":"ColumnDataSource"},"glyph":{"id":"65717","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65719","type":"Line"},"nonselection_glyph":{"id":"65718","type":"Line"},"selection_glyph":null,"view":{"id":"65721","type":"CDSView"}},"id":"65720","type":"GlyphRenderer"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAJPAIvK5iZ4/bhCadUvnpj9uEJp1S+emP24QmnVL56Y/k8Ai8rmJrj9cuFU3FBazP1y4VTcUFrM/XLhVNxQWsz9uEJp1S+e2P24QmnVL57Y/bhCadUvntj9uEJp1S+e2P24QmnVL57Y/bhCadUvntj9uEJp1S+e2P2Xkd9av/sQ/ZeR31q/+xD9l5HfWr/7EP2Xkd9av/sQ/ZeR31q/+xD9l5HfWr/7EP2Xkd9av/sQ/bhCadUvnxj9uEJp1S+fGP24QmnVL58Y/bhCadUvnxj9uEJp1S+fGP24QmnVL58Y/bhCadUvnxj9uEJp1S+fGP24QmnVL58Y/bhCadUvnxj+AaN6zgrjKP1KMM5h4LdE/V6LEZ8Yh4j+D86abqTLrP3MmK0WZ2/c/lUvr2eAD/z+t7ae7wcgGQHWx8yzAVQhAUowzmHgtEUDtyrUBOKoWQF5DHh87kCNAefqKBzeKLEAhvtK1wugwQK/mAp+XJTJAgGjes4K4OkDqrX8VwBJBQOqtfxXAEkFArPRM2OtrS0Dq+BfR/7lQQANgSMJa3FBAfwl3ulrbWEAsWWgZQLNcQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total","France: total"]},"selected":{"id":"65505","type":"Selection"},"selection_policy":{"id":"65551","type":"UnionRenderers"}},"id":"65504","type":"ColumnDataSource"},{"attributes":{"base":24,"mantissas":[1,2,4,6,8,12],"max_interval":43200000.0,"min_interval":3600000.0,"num_minor_ticks":0},"id":"65463","type":"AdaptiveTicker"},{"attributes":{"line_alpha":0.2,"line_color":"#fb9a99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65571","type":"Line"},{"attributes":{"callback":null,"end":1500,"reset_end":1500,"reset_start":0.2,"start":0.2,"tags":[[["confirmed_per_mn","confirmed_per_mn",null]]]},"id":"65392","type":"Range1d"},{"attributes":{"line_color":"#1f78b4","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65947","type":"Line"},{"attributes":{},"id":"65585","type":"UnionRenderers"},{"attributes":{"label":{"value":"United States: NJ"},"renderers":[{"id":"65900","type":"GlyphRenderer"}]},"id":"65943","type":"LegendItem"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmf4edjHy6P+9UWr5dqME/71Ravl2o0T/INLzlgEfYPwTKUlWYsdw/BMpSVZix3D95j9YJ+yznP1NvODEezO0/IWLJ9z269z9J5xD75nP/P4yfJXZp3QNAzfjPgJxzB0D6QSsfYVkOQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX"]},"selected":{"id":"65997","type":"Selection"},"selection_policy":{"id":"66091","type":"UnionRenderers"}},"id":"65996","type":"ColumnDataSource"},{"attributes":{},"id":"65519","type":"UnionRenderers"},{"attributes":{"label":{"value":"United States: NY"},"renderers":[{"id":"65950","type":"GlyphRenderer"}]},"id":"65995","type":"LegendItem"},{"attributes":{"data_source":{"id":"66050","type":"ColumnDataSource"},"glyph":{"id":"66053","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"66055","type":"Line"},"nonselection_glyph":{"id":"66054","type":"Line"},"selection_glyph":null,"view":{"id":"66057","type":"CDSView"}},"id":"66056","type":"GlyphRenderer"},{"attributes":{"line_color":"#fdbf6f","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65639","type":"Line"},{"attributes":{"overlay":{"id":"65473","type":"BoxAnnotation"}},"id":"65432","type":"BoxZoomTool"},{"attributes":{"source":{"id":"65846","type":"ColumnDataSource"}},"id":"65853","type":"CDSView"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP07Qo38lz8A/TtCjfyXPwD9O0KN/Jc/AP4msXp+Bau0/bD6Bj9Mc9z9YSpgvCukCQIRvZEePXQxA36WPs3V8FEDWK5sDkWIiQN+lj7N1fCRA/RNtwyPKKkCLIqi9bwUwQIsiqL1vBTBAQtofHAyIQUDQM3ycJwhIQKfVYL6mBU1AF7uZmc2lUkC3Apnka8dSQBo6zJclHFVAyjtdNb6tXUDiIR9nqqlhQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA"]},"selected":{"id":"66051","type":"Selection"},"selection_policy":{"id":"66149","type":"UnionRenderers"}},"id":"66050","type":"ColumnDataSource"},{"attributes":{},"id":"65429","type":"SaveTool"},{"attributes":{},"id":"65430","type":"PanTool"},{"attributes":{},"id":"65997","type":"Selection"},{"attributes":{"line_color":"#33a02c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66053","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#fdbf6f","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65641","type":"Line"},{"attributes":{},"id":"65659","type":"UnionRenderers"},{"attributes":{},"id":"65715","type":"Selection"},{"attributes":{"data_source":{"id":"65600","type":"ColumnDataSource"},"glyph":{"id":"65603","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65605","type":"Line"},"nonselection_glyph":{"id":"65604","type":"Line"},"selection_glyph":null,"view":{"id":"65607","type":"CDSView"}},"id":"65606","type":"GlyphRenderer"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABPlWzsv5eYP6O6h+evva4/+Sf66beqyz+lAt/ux4TVP1H02PL0heA/T35X7aJw5z/RlnhxoEDyPyTqvWrKtPo/5epDrTqJB0AmSSpx/6ISQO7CU8nBexxAmrRNze58J0DuFKcJOAYyQE7aq+kWDTxABPYISkGLQUDP4DWLphdFQEoXUD1egExAws4VtB17UUDsR08kIbZTQOVK47xmf1VAU1jImHgkWEAJS36atwRbQMGq7HHhPl5AUBBsDsEOYUAwjMqXRRtjQGW/WD3Y62RA7akW/3iAZkCJWK4jIkVoQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total"]},"selected":{"id":"65567","type":"Selection"},"selection_policy":{"id":"65621","type":"UnionRenderers"}},"id":"65566","type":"ColumnDataSource"},{"attributes":{},"id":"65431","type":"WheelZoomTool"},{"attributes":{"source":{"id":"65944","type":"ColumnDataSource"}},"id":"65951","type":"CDSView"},{"attributes":{},"id":"65929","type":"UnionRenderers"},{"attributes":{},"id":"65895","type":"Selection"},{"attributes":{},"id":"65415","type":"LinearScale"},{"attributes":{"line_color":"#b2df8a","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65999","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#b15928","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65850","type":"Line"},{"attributes":{},"id":"65567","type":"Selection"},{"attributes":{},"id":"65981","type":"UnionRenderers"},{"attributes":{"line_alpha":0.2,"line_color":"#33a02c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66055","type":"Line"},{"attributes":{"num_minor_ticks":5,"tickers":[{"id":"65461","type":"AdaptiveTicker"},{"id":"65462","type":"AdaptiveTicker"},{"id":"65463","type":"AdaptiveTicker"},{"id":"65464","type":"DaysTicker"},{"id":"65465","type":"DaysTicker"},{"id":"65466","type":"DaysTicker"},{"id":"65467","type":"DaysTicker"},{"id":"65468","type":"MonthsTicker"},{"id":"65469","type":"MonthsTicker"},{"id":"65470","type":"MonthsTicker"},{"id":"65471","type":"MonthsTicker"},{"id":"65472","type":"YearsTicker"}]},"id":"65420","type":"DatetimeTicker"},{"attributes":{"line_color":"#fb9a99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65569","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#1f78b4","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65948","type":"Line"},{"attributes":{"data_source":{"id":"65846","type":"ColumnDataSource"},"glyph":{"id":"65849","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65851","type":"Line"},"nonselection_glyph":{"id":"65850","type":"Line"},"selection_glyph":null,"view":{"id":"65853","type":"CDSView"}},"id":"65852","type":"GlyphRenderer"},{"attributes":{"grid_line_color":null,"ticker":{"id":"65420","type":"DatetimeTicker"}},"id":"65423","type":"Grid"},{"attributes":{"data_source":{"id":"65944","type":"ColumnDataSource"},"glyph":{"id":"65947","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65949","type":"Line"},"nonselection_glyph":{"id":"65948","type":"Line"},"selection_glyph":null,"view":{"id":"65951","type":"CDSView"}},"id":"65950","type":"GlyphRenderer"},{"attributes":{"data_source":{"id":"65894","type":"ColumnDataSource"},"glyph":{"id":"65897","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65899","type":"Line"},"nonselection_glyph":{"id":"65898","type":"Line"},"selection_glyph":null,"view":{"id":"65901","type":"CDSView"}},"id":"65900","type":"GlyphRenderer"},{"attributes":{"data_source":{"id":"65476","type":"ColumnDataSource"},"glyph":{"id":"65479","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65481","type":"Line"},"nonselection_glyph":{"id":"65480","type":"Line"},"selection_glyph":null,"view":{"id":"65483","type":"CDSView"}},"id":"65482","type":"GlyphRenderer"},{"attributes":{"dimension":1,"grid_line_color":null,"ticker":{"id":"65425","type":"LogTicker"}},"id":"65428","type":"Grid"},{"attributes":{"axis_label":"confirmed_per_mn","bounds":"auto","formatter":{"id":"65441","type":"PrintfTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"65425","type":"LogTicker"}},"id":"65424","type":"LogAxis"},{"attributes":{},"id":"65477","type":"Selection"},{"attributes":{},"id":"65417","type":"LogScale"},{"attributes":{"axis_label":"dt","bounds":"auto","formatter":{"id":"65443","type":"DatetimeTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"65420","type":"DatetimeTicker"}},"id":"65419","type":"DatetimeAxis"},{"attributes":{"line_color":"#a6cee3","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65897","type":"Line"},{"attributes":{"num_minor_ticks":10},"id":"65425","type":"LogTicker"},{"attributes":{"line_alpha":0.2,"line_color":"#1f78b4","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65949","type":"Line"},{"attributes":{"label":{"value":"United States: MI"},"renderers":[{"id":"65852","type":"GlyphRenderer"}]},"id":"65893","type":"LegendItem"},{"attributes":{},"id":"65879","type":"UnionRenderers"},{"attributes":{},"id":"66091","type":"UnionRenderers"},{"attributes":{"source":{"id":"65894","type":"ColumnDataSource"}},"id":"65901","type":"CDSView"},{"attributes":{"line_alpha":0.2,"line_color":"#b15928","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65851","type":"Line"},{"attributes":{"label":{"value":"South Korea: total"},"renderers":[{"id":"65642","type":"GlyphRenderer"}]},"id":"65673","type":"LegendItem"},{"attributes":{"line_color":"#33a02c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65537","type":"Line"},{"attributes":{},"id":"65621","type":"UnionRenderers"},{"attributes":{"text":"Confirmed cases per mn pop, selected countries and regions/states","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"65411","type":"Title"},{"attributes":{"line_color":"#cab2d6","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65717","type":"Line"},{"attributes":{"label":{"value":"United States: WA"},"renderers":[{"id":"66056","type":"GlyphRenderer"}]},"id":"66105","type":"LegendItem"},{"attributes":{"data_source":{"id":"66106","type":"ColumnDataSource"},"glyph":{"id":"66109","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"66111","type":"Line"},"nonselection_glyph":{"id":"66110","type":"Line"},"selection_glyph":null,"view":{"id":"66113","type":"CDSView"}},"id":"66112","type":"GlyphRenderer"},{"attributes":{"source":{"id":"66050","type":"ColumnDataSource"}},"id":"66057","type":"CDSView"},{"attributes":{"label":{"value":"Italy: total"},"renderers":[{"id":"65606","type":"GlyphRenderer"}]},"id":"65635","type":"LegendItem"},{"attributes":{"data_source":{"id":"65674","type":"ColumnDataSource"},"glyph":{"id":"65677","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65679","type":"Line"},"nonselection_glyph":{"id":"65678","type":"Line"},"selection_glyph":null,"view":{"id":"65681","type":"CDSView"}},"id":"65680","type":"GlyphRenderer"},{"attributes":{"data_source":{"id":"65636","type":"ColumnDataSource"},"glyph":{"id":"65639","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"65641","type":"Line"},"nonselection_glyph":{"id":"65640","type":"Line"},"selection_glyph":null,"view":{"id":"65643","type":"CDSView"}},"id":"65642","type":"GlyphRenderer"},{"attributes":{"label":{"value":"United States: total"},"renderers":[{"id":"66112","type":"GlyphRenderer"}]},"id":"66163","type":"LegendItem"},{"attributes":{"line_alpha":0.2,"line_color":"#1f78b4","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65481","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#fdbf6f","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65640","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#a6cee3","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65899","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#1f78b4","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65480","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#e31a1c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65605","type":"Line"},{"attributes":{"source":{"id":"65636","type":"ColumnDataSource"}},"id":"65643","type":"CDSView"},{"attributes":{},"id":"66149","type":"UnionRenderers"},{"attributes":{},"id":"65675","type":"Selection"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_multi":null,"active_scroll":"auto","active_tap":"auto","tools":[{"id":"65393","type":"HoverTool"},{"id":"65429","type":"SaveTool"},{"id":"65430","type":"PanTool"},{"id":"65431","type":"WheelZoomTool"},{"id":"65432","type":"BoxZoomTool"},{"id":"65433","type":"ResetTool"}]},"id":"65434","type":"Toolbar"},{"attributes":{"line_alpha":0.2,"line_color":"#ff7f00","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65679","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#fb9a99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66111","type":"Line"},{"attributes":{},"id":"66107","type":"Selection"},{"attributes":{},"id":"66201","type":"UnionRenderers"},{"attributes":{"line_color":"#fb9a99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66109","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#fb9a99","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66110","type":"Line"},{"attributes":{"label":{"value":"France: total"},"renderers":[{"id":"65510","type":"GlyphRenderer"}]},"id":"65533","type":"LegendItem"},{"attributes":{"label":{"value":"Germany: total"},"renderers":[{"id":"65540","type":"GlyphRenderer"}]},"id":"65565","type":"LegendItem"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKvw57e1iMs/q/Dnt7WIyz+A9O1JiKb0P+a2MeUrWRBAwO7kbsz5HkDHhqFQPZAwQBrlvjAxkzNAtm9mE0FBPUBDlM0gqxRFQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA","United States: LA"]},"selected":{"id":"65757","type":"Selection"},"selection_policy":{"id":"65831","type":"UnionRenderers"}},"id":"65756","type":"ColumnDataSource"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"jtaq2sLdaD+O1qrawt1oP47WqtrC3Xg/jtaq2sLdeD8xjFWRMxWPPzGMVZEzFY8/MYxVkTMVjz8xjFWRMxWPPzGMVZEzFY8/vHtVfwrClT+O1qrawt2YP47WqtrC3Zg/gnNV9nUYoT+Cc1X2dRihP4JzVfZ1GKE/gnNV9nUYoT+Cc1X2dRihP4JzVfZ1GKE/gnNV9nUYoT+Cc1X2dRihP+ogACRSpqI/6iAAJFKmoj9TzqpRLjSkP1POqlEuNKQ/U86qUS40pD9TzqpRLjSkP1POqlEuNKQ/U86qUS40pD9TzqpRLjSkP1POqlEuNKQ/JSkAreZPpz8lKQCt5k+nPyUpAK3mT6c/+SJARrfQwz/5IkBGt9DDPxYnwIqBJcY/cdIqlviIxj8lKQCt5k/HP/eDVQifa8o/FIjVTGnAzD9FzGovyQnTP8t9laFv7NY/wd2K0iTy3D/ez1or+hPlP5XXymv1cuk/dSKw/R2G8z8S1zojXCj5P0+H/V+DUPw/b35JPK9JB0DnNgwCaxsPQPh4T5kSMRRAB4RnMfJ0GkA4HXVqJI4gQCjQK2TwPSVAoTFI2sceLEC897TCkX0zQA==","dtype":"float64","shape":[56]},"dt":{"__ndarray__":"AABAx6j8dkIAAAAt+/x2QgAAwJJN/XZCAACA+J/9dkIAAEBe8v12QgAAAMRE/nZCAADAKZf+dkIAAICP6f52QgAAQPU7/3ZCAAAAW47/dkIAAMDA4P92QgAAgCYzAHdCAABAjIUAd0IAAADy1wB3QgAAwFcqAXdCAACAvXwBd0IAAEAjzwF3QgAAAIkhAndCAADA7nMCd0IAAIBUxgJ3QgAAQLoYA3dCAAAAIGsDd0IAAMCFvQN3QgAAgOsPBHdCAABAUWIEd0IAAAC3tAR3QgAAwBwHBXdCAACAglkFd0IAAEDoqwV3QgAAAE7+BXdCAADAs1AGd0IAAIAZowZ3QgAAQH/1BndCAAAA5UcHd0IAAMBKmgd3QgAAgLDsB3dCAABAFj8Id0IAAAB8kQh3QgAAwOHjCHdCAACARzYJd0IAAECtiAl3QgAAABPbCXdCAADAeC0Kd0IAAIDefwp3QgAAQETSCndCAAAAqiQLd0IAAMAPdwt3QgAAgHXJC3dCAABA2xsMd0IAAABBbgx3QgAAwKbADHdCAACADBMNd0IAAEByZQ13QgAAANi3DXdCAADAPQoOd0IAAICjXA53Qg==","dtype":"float64","shape":[56]},"dt_dt_strings":["2020-01-22 00:00:00","2020-01-23 00:00:00","2020-01-24 00:00:00","2020-01-25 00:00:00","2020-01-26 00:00:00","2020-01-27 00:00:00","2020-01-28 00:00:00","2020-01-29 00:00:00","2020-01-30 00:00:00","2020-01-31 00:00:00","2020-02-01 00:00:00","2020-02-02 00:00:00","2020-02-03 00:00:00","2020-02-04 00:00:00","2020-02-05 00:00:00","2020-02-06 00:00:00","2020-02-07 00:00:00","2020-02-08 00:00:00","2020-02-09 00:00:00","2020-02-10 00:00:00","2020-02-11 00:00:00","2020-02-12 00:00:00","2020-02-13 00:00:00","2020-02-14 00:00:00","2020-02-15 00:00:00","2020-02-16 00:00:00","2020-02-17 00:00:00","2020-02-18 00:00:00","2020-02-19 00:00:00","2020-02-20 00:00:00","2020-02-21 00:00:00","2020-02-22 00:00:00","2020-02-23 00:00:00","2020-02-24 00:00:00","2020-02-25 00:00:00","2020-02-26 00:00:00","2020-02-27 00:00:00","2020-02-28 00:00:00","2020-02-29 00:00:00","2020-03-01 00:00:00","2020-03-02 00:00:00","2020-03-03 00:00:00","2020-03-04 00:00:00","2020-03-05 00:00:00","2020-03-06 00:00:00","2020-03-07 00:00:00","2020-03-08 00:00:00","2020-03-09 00:00:00","2020-03-10 00:00:00","2020-03-11 00:00:00","2020-03-12 00:00:00","2020-03-13 00:00:00","2020-03-14 00:00:00","2020-03-15 00:00:00","2020-03-16 00:00:00","2020-03-17 00:00:00"],"label":["United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total"]},"selected":{"id":"66107","type":"Selection"},"selection_policy":{"id":"66201","type":"UnionRenderers"}},"id":"66106","type":"ColumnDataSource"},{"attributes":{"line_color":"#1f78b4","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65479","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#33a02c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"66054","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#33a02c","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65539","type":"Line"},{"attributes":{},"id":"65433","type":"ResetTool"},{"attributes":{"source":{"id":"65476","type":"ColumnDataSource"}},"id":"65483","type":"CDSView"},{"attributes":{"line_color":"#ff7f00","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65677","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#a6cee3","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65898","type":"Line"},{"attributes":{"source":{"id":"66106","type":"ColumnDataSource"}},"id":"66113","type":"CDSView"},{"attributes":{"source":{"id":"65674","type":"ColumnDataSource"}},"id":"65681","type":"CDSView"},{"attributes":{"line_alpha":0.1,"line_color":"#ff7f00","line_width":2,"x":{"field":"dt"},"y":{"field":"confirmed_per_mn"}},"id":"65678","type":"Line"}],"root_ids":["65410"]},"title":"Bokeh Application","version":"1.4.0"}};
+  var render_items = [{"docid":"b37a97d3-fb67-4d9d-9ce8-3b10af3a601e","roots":{"65410":"90181d90-555f-43a8-8d2b-face844f29e7"}}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        clearInterval(timer);
+        embed_document(root);
+      } else {
+        attempts++;
+        if (attempts > 100) {
+          clearInterval(timer);
+          console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing");
+        }
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
