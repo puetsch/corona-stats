@@ -1,0 +1,833 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-1.4.0.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.msg_handler(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      var msg = msg.metadata;
+      var comm_id = msg.comm_id;
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg.traceback)
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.msg_handler = function(msg) {
+  var metadata = msg.metadata;
+  if ((metadata.msg_type == "Ready")) {
+    if (metadata.content) {
+      console.log("Python callback returned following output:", metadata.content);
+    }
+	return;
+  } else if (metadata.msg_type == "Error") {
+    console.log("Python failed with the following traceback:", metadata.traceback)
+    return
+  }
+  this.process_msg(msg)
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(frame);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.wait = true;
+    this.dynamic_update(frame)
+  } else {
+    this.update(frame)
+  }
+}
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+  window.PyViz = window.HoloViews
+} else if (window.PyViz === undefined) {
+  window.PyViz = window.HoloViews
+}
+
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        window.PyViz.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.PyViz.comms) {
+        return window.PyViz.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        var comm = window.PyViz.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+
+      window.PyViz.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.PyViz.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+
+
+
+
+
+  <div class="bk-root" id="d8566019-2304-4823-8b44-75312e7ca828" data-root-id="132445"></div>
+
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"b0c8ff87-6492-4438-96f5-038c78711280":{"roots":{"references":[{"attributes":{"align":null,"below":[{"id":"132454","type":"LogAxis"}],"center":[{"id":"132458","type":"Grid"},{"id":"132463","type":"Grid"},{"id":"132498","type":"Legend"}],"left":[{"id":"132459","type":"LinearAxis"}],"margin":null,"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":500,"plot_width":800,"renderers":[{"id":"132492","type":"GlyphRenderer"},{"id":"132506","type":"GlyphRenderer"},{"id":"132521","type":"GlyphRenderer"},{"id":"132538","type":"GlyphRenderer"},{"id":"132557","type":"GlyphRenderer"},{"id":"132578","type":"GlyphRenderer"},{"id":"132601","type":"GlyphRenderer"},{"id":"132626","type":"GlyphRenderer"},{"id":"132653","type":"GlyphRenderer"},{"id":"132682","type":"GlyphRenderer"},{"id":"132713","type":"GlyphRenderer"}],"sizing_mode":"fixed","title":{"id":"132446","type":"Title"},"toolbar":{"id":"132469","type":"Toolbar"},"x_range":{"id":"132432","type":"Range1d"},"x_scale":{"id":"132450","type":"LogScale"},"y_range":{"id":"132433","type":"Range1d"},"y_scale":{"id":"132452","type":"LinearScale"}},"id":"132445","subtype":"Figure","type":"Plot"},{"attributes":{},"id":"132512","type":"UnionRenderers"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"7hSnCTgGMkBO2qvpFg08QAT2CEpBi0FAz+A1i6YXRUBKF1A9XoBMQMLOFbQde1FA7EdPJCG2U0DlSuO8Zn9VQFNYyJh4JFhACUt+mrcEW0DBquxx4T5eQFAQbA7BDmFAMIzKl0UbY0Blv1g92OtkQO2pFv94gGZAiViuIyJFaEDmvkF6LA9qQI/NAaMcoWtARHCHrHF8bUAy918lpO9uQKjDEtBUPXBAnvi6nW1McUBVf62L9p5yQLMeXNvNRnRATcFuH84RdkByQ68G+0N4QNfU2ML5knpAxymdBlnAfEA=","dtype":"float64","shape":[28]},"growth_wow":{"__ndarray__":"45IhWEebOEBuiVO/55Y4QIjiL3KGBTVARQbS+3OtLEDj6gcdFXgoQE3uWJKdoyNAB3tNjNTaGkCJAeOxURUTQKhQoUKFigtAx4pIGgKkCEB/XWWZf/EGQHQxoVnGJgNAelqKi+Z8AUAZrHs6ZvsAQFL9YmdUvwBAi8Ggd6UVAEB3vp8aL93+P+3gBMBhO/0/zuLj92mo+z/HzAqf/Of5P4sTTDHS1vg/sRgGNbGZ+D8tUVFwOo34P3Ctrpom5vg/CzXWuoqP+T+zhpgOmFX6P9MD5pXufPs/QUYNhcNT/D8=","dtype":"float64","shape":[28]},"label":["Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total","Iran: total"]},"selected":{"id":"132516","type":"Selection"},"selection_policy":{"id":"132548","type":"UnionRenderers"}},"id":"132515","type":"ColumnDataSource"},{"attributes":{"source":{"id":"132707","type":"ColumnDataSource"}},"id":"132714","type":"CDSView"},{"attributes":{"label":{"value":"China: Hubei"},"renderers":[{"id":"132492","type":"GlyphRenderer"}]},"id":"132499","type":"LegendItem"},{"attributes":{"data_source":{"id":"132532","type":"ColumnDataSource"},"glyph":{"id":"132535","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132537","type":"Line"},"nonselection_glyph":{"id":"132536","type":"Line"},"selection_glyph":null,"view":{"id":"132539","type":"CDSView"}},"id":"132538","type":"GlyphRenderer"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"gDsov1q5MkCEJrrThx48QLohodzq5UBAhQshugjERECwdp66PaNJQMruG7OSAlBAKimGNBY9U0BohY+I2GlYQAGQdePhml5APOZTCfgHY0BzrB0l7g5lQJjmr8mL22lAmOavyYvbaUCe4qJMTlJyQKGqmkcS83VAMw+UaImseUC/+V3OLwd9QOThrcLTV4BAGGMJgH6GgkB2mJoiOkmFQH7/9LoiZIhA58kXtt7Ki0Cd0rhBNa2OQD4rfKqUlJBA2waMphnxkUDujXa5B0uTQHEHeobk5pRAeY3G/ztvlkC/9ftS5PuXQAtezGFJVplA","dtype":"float64","shape":[30]},"growth_wow":{"__ndarray__":"MsYYY4wxMkDcobodqtslQODYZtQayCFAVooJuqsUH0CQGp3io0YbQN4nxitwjxdAIC7UnATiFEAFMbmCmNwUQHEFsl0WahFAdvlQiwcFEkCs6GUatTkQQCMFoo0jIxBA5Wt77mPXCUBheOnpe3kOQGL1mwA2xQxAj36eth3YCkD9K94Sm2cIQDd1Jfey1QhALmAdUw/tBkDGRxvYrFcKQIcc7OjxTAVAYmcgQltCBEACRPYGHR4DQB0J/UolRwJAM7EoeK6QAUBGGMaNvqkAQD4A67ErbP8/w/CKkNdu/T967B4sa537Px+rS9wbbvo/","dtype":"float64","shape":[30]},"label":["Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total","Italy: total"]},"selected":{"id":"132533","type":"Selection"},"selection_policy":{"id":"132569","type":"UnionRenderers"}},"id":"132532","type":"ColumnDataSource"},{"attributes":{"line_color":"#98df8a","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132575","type":"Line"},{"attributes":{"label":{"value":"Italy: total"},"renderers":[{"id":"132538","type":"GlyphRenderer"}]},"id":"132550","type":"LegendItem"},{"attributes":{},"id":"132468","type":"ResetTool"},{"attributes":{"line_alpha":0.2,"line_color":"#ffbb78","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132537","type":"Line"},{"attributes":{"line_color":"#2ca02c","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132554","type":"Line"},{"attributes":{"data_source":{"id":"132676","type":"ColumnDataSource"},"glyph":{"id":"132679","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132681","type":"Line"},"nonselection_glyph":{"id":"132680","type":"Line"},"selection_glyph":null,"view":{"id":"132683","type":"CDSView"}},"id":"132682","type":"GlyphRenderer"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"vnBUAU0WMED4nv1aOt4yQHkPfXZOWjhAIPYga38NQUAcf4///ZBGQJtpqgS0ak5AgDbieqMJUkDnl8pO/u1UQIn97PnQCVlAcmyjOXgjW0BCs/+orGRdQHTq8MDY1F9AiVwBrkj/YEB+yUDt/qdhQL3CWbdYDWJAz3Ro7fkiYkAwjZPJh7hiQMP1ckb7/mJA2ABY8PVCY0DORQH8FYVjQDA2lqQNtGNA0/et48jhY0AxozcyshVkQO2gdFsrT2RAsYGerBqtZEAv82OZ3uJkQBXf1OK2PWVAlalwQ9ShZUCVqXBD1KFlQPeZBezL0GVAT7t4hpgOZkAmOubz3U5mQCMJprMah2ZAqV1YyFThZkDgc4RqOCJnQA==","dtype":"float64","shape":[35]},"growth_wow":{"__ndarray__":"RERERETEO0CEEEIIIYQ/QNdaa621VkRAsRM7sRP7MEBpaWlpaekmQGmuqTFsGR1ANQpEcOzSGEA01ofG+tAUQCqR9uN6OxVAbg8EHI7UEUA4SgBFJpQLQJIOG+mwkQZAT5GugsThAUBP0OxwxlL/PzAS9NW3mfs/d469gOgt9z8xYcKECRP2P+qI8UJBrvQ/hMAiwRJd8z+NZ+Dk6V/yPx6Yawfm2vE/Y2LZ2y+f8T+QUrGM97fxP1yhuBWKW/E/lXrozkhq8T+pVtmee1nxP6MKCGMsafE/ReNp6PeQ8T8SrbA5kGjxPxD8wA/8YPE/kjF/nH1g8T+WJoHDR0PxP/ksbFrsQfE/ivGuXRQ88T+38fOlTxzxPw==","dtype":"float64","shape":[35]},"label":["South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total","South Korea: total"]},"selected":{"id":"132552","type":"Selection"},"selection_policy":{"id":"132592","type":"UnionRenderers"}},"id":"132551","type":"ColumnDataSource"},{"attributes":{},"id":"132516","type":"Selection"},{"attributes":{"line_alpha":0.1,"line_color":"#c5b0d5","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132680","type":"Line"},{"attributes":{},"id":"132552","type":"Selection"},{"attributes":{"data_source":{"id":"132515","type":"ColumnDataSource"},"glyph":{"id":"132518","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132520","type":"Line"},"nonselection_glyph":{"id":"132519","type":"Line"},"selection_glyph":null,"view":{"id":"132522","type":"CDSView"}},"id":"132521","type":"GlyphRenderer"},{"attributes":{"line_alpha":0.2,"line_color":"#c5b0d5","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132681","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#8c564b","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132711","type":"Line"},{"attributes":{"source":{"id":"132500","type":"ColumnDataSource"}},"id":"132507","type":"CDSView"},{"attributes":{"line_alpha":0.2,"line_color":"#98df8a","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132577","type":"Line"},{"attributes":{"label":{"value":"Germany: total"},"renderers":[{"id":"132506","type":"GlyphRenderer"}]},"id":"132514","type":"LegendItem"},{"attributes":{"line_alpha":0.2,"line_color":"#aec7e8","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132505","type":"Line"},{"attributes":{"line_color":"#8c564b","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132710","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#aec7e8","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132504","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#ff9896","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132625","type":"Line"},{"attributes":{"callback":null,"end":5000,"reset_end":5000,"reset_start":3,"start":3,"tags":[[["confirmed_per_mn","confirmed_per_mn",null]]]},"id":"132432","type":"Range1d"},{"attributes":{},"id":"132466","type":"WheelZoomTool"},{"attributes":{},"id":"132708","type":"Selection"},{"attributes":{"data_source":{"id":"132500","type":"ColumnDataSource"},"glyph":{"id":"132503","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132505","type":"Line"},"nonselection_glyph":{"id":"132504","type":"Line"},"selection_glyph":null,"view":{"id":"132507","type":"CDSView"}},"id":"132506","type":"GlyphRenderer"},{"attributes":{"line_color":"#ff7f0e","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132518","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#ff9896","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132624","type":"Line"},{"attributes":{"source":{"id":"132647","type":"ColumnDataSource"}},"id":"132654","type":"CDSView"},{"attributes":{},"id":"132573","type":"Selection"},{"attributes":{"line_color":"#d62728","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132598","type":"Line"},{"attributes":{"line_color":"#aec7e8","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132503","type":"Line"},{"attributes":{},"id":"132548","type":"UnionRenderers"},{"attributes":{"source":{"id":"132486","type":"ColumnDataSource"}},"id":"132493","type":"CDSView"},{"attributes":{"source":{"id":"132676","type":"ColumnDataSource"}},"id":"132683","type":"CDSView"},{"attributes":{},"id":"132464","type":"SaveTool"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"OLWOes+FMUAETE5SWfI2QA6936m+/ThAJ+A2J0sZRkDAnbSvJZJLQDGFBg5pbFFA/+KXyUHdVUC7kL5wHNVbQNPyoXQLiGJA6w+bh+YHZ0A+grU4gNZtQO9yjd9VsnBAmZ9skS+yckCZzzhxGdd1QDdOVVZUy3hAlAtrX+ANfEACf7g9YoOAQJ/g08JsHoNAMVVtkfquhUD5yvVMUFaHQA==","dtype":"float64","shape":[20]},"growth_wow":{"__ndarray__":"L6fg5RS8HUDnLvirOCEdQBWsPhWsPhFApAcqZ7fwFUAK/5wqJfQWQJ7YiZ3YSRZAL6fg5RS8GEBJD3n/8mkZQMS69Ji/1xlA5G2es2l9HUB7m1iYb5oVQMvWkez7YBNAQYl/8ygrEUBKYu/m/PYPQE92Oo7BgQxA84WC1dE4CEB1FogysvEGQDzn71sVgQRAJFQ/9WDHBECEQ2Cfy/gDQA==","dtype":"float64","shape":[20]},"label":["Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total","Germany: total"]},"selected":{"id":"132501","type":"Selection"},"selection_policy":{"id":"132529","type":"UnionRenderers"}},"id":"132500","type":"ColumnDataSource"},{"attributes":{"label":{"value":"United States: total"},"renderers":[{"id":"132713","type":"GlyphRenderer"}]},"id":"132739","type":"LegendItem"},{"attributes":{"click_policy":"mute","items":[{"id":"132499","type":"LegendItem"},{"id":"132514","type":"LegendItem"},{"id":"132531","type":"LegendItem"},{"id":"132550","type":"LegendItem"},{"id":"132571","type":"LegendItem"},{"id":"132594","type":"LegendItem"},{"id":"132619","type":"LegendItem"},{"id":"132646","type":"LegendItem"},{"id":"132675","type":"LegendItem"},{"id":"132706","type":"LegendItem"},{"id":"132739","type":"LegendItem"}],"location":"top_left"},"id":"132498","type":"Legend"},{"attributes":{"line_alpha":0.1,"line_color":"#ffbb78","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132536","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#2ca02c","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132555","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#9467bd","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132652","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#8c564b","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132712","type":"Line"},{"attributes":{"label":{"value":"Iran: total"},"renderers":[{"id":"132521","type":"GlyphRenderer"}]},"id":"132531","type":"LegendItem"},{"attributes":{"label":{"value":"South Korea: total"},"renderers":[{"id":"132557","type":"GlyphRenderer"}]},"id":"132571","type":"LegendItem"},{"attributes":{},"id":"132533","type":"Selection"},{"attributes":{},"id":"132704","type":"UnionRenderers"},{"attributes":{},"id":"132501","type":"Selection"},{"attributes":{"data_source":{"id":"132707","type":"ColumnDataSource"},"glyph":{"id":"132710","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132712","type":"Line"},"nonselection_glyph":{"id":"132711","type":"Line"},"selection_glyph":null,"view":{"id":"132714","type":"CDSView"}},"id":"132713","type":"GlyphRenderer"},{"attributes":{},"id":"132529","type":"UnionRenderers"},{"attributes":{},"id":"132569","type":"UnionRenderers"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"D1C0y/fHNkBB66WoVP5BQLX2HDT5K0hAtfYcNPkrSEBbv9dVPcVbQKm/7E4L9mBAF1YXr/WxZEBowbnHl2JqQOnOEsWWLW9AQJQqxTl1ckCdyCqFB9Z3QBRpE2lGFXtAG5l/zsXVgEDcqrlQPhaDQMY13hDZT4dAmqQ9IHd2ikDiMGZoD22QQME2iIN5K5NA5RBBOy/NlUBfHsAJe0uYQGsl8P5Wk5pA","dtype":"float64","shape":[21]},"growth_wow":{"__ndarray__":"IiIiIiLiIUCMLrroooskQDeYIp91gyRAVDlCP0CVIUApXI/C9SgqQKrx0k1ikClAq37TVIEsJ0CjlGEX/ociQBKVuxpRuRtAbC38eYdvGEDkOI7jOI4fQFRDBkg8NQ9AeDH7Rx3DD0Bi+BuiYYMNQI+70gzVRQxA5Ajq2w0pC0BE/zvmM3oMQOYAwydOvAlAyijeiHDCCUD3cRCf+xYHQBa7pT4MRwZA","dtype":"float64","shape":[21]},"label":["Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total","Spain: total"]},"selected":{"id":"132573","type":"Selection"},"selection_policy":{"id":"132617","type":"UnionRenderers"}},"id":"132572","type":"ColumnDataSource"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"132497","type":"BoxAnnotation"},{"attributes":{"line_alpha":0.1,"line_color":"#1f77b4","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132490","type":"Line"},{"attributes":{"data_source":{"id":"132551","type":"ColumnDataSource"},"glyph":{"id":"132554","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132556","type":"Line"},"nonselection_glyph":{"id":"132555","type":"Line"},"selection_glyph":null,"view":{"id":"132558","type":"CDSView"}},"id":"132557","type":"GlyphRenderer"},{"attributes":{},"id":"132617","type":"UnionRenderers"},{"attributes":{},"id":"132673","type":"UnionRenderers"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"n5+wlMIbTkAQi5vJtMRUQGypaVLml1hANBgPno5MXkBGDSElDKxnQASMPhl7o2xAj91Kl1CpcUCt9ZD/EtN0QAuku0txandAlOgBRp9sekBPI4+CqbJ8QJ20smzNYH9AtNhS06TMgEBbfY2Xq6qBQFt9jZerqoFAmsvDGTGGiUDdyx67lc6MQEs8rwRmyI1A3kqXUGnOjkA8rwRmWMOPQGHh1tVpVJBAYt/HABFskECMmbrf64eQQEh3l+LUlpBAb6VLqDT3kEBvpUuoNPeQQIuuvLf2BJFAAFuhZMgmkUBFxXLD9UGRQKiiK++tXZFAlcIbQDtzkUBsqWlS5o+RQI1z1NmHtpFA7/f6ddDDkUBcIN1disuRQCw3XJ9V05FAZf+Ah2rckUB/VL6i9OSRQFU9G4r46ZFAT2s95L/skUBX8U5+MO+RQPfFunFX8JFACOGy/jjxkUAmVJrLw/GRQBn8qosa8pFAqLUe8l/ykUA3b5JYpfKRQMYoBr/q8pFAKhejGPzykUCNBUByDfORQI0FQHIN85FAjQVAcg3zkUCNBUByDfORQI0FQHIN85FAjQVAcg3zkUDx89zLHvORQPHz3Mse85FA8fPcyx7zkUDx89zLHvORQPHz3Mse85FA8fPcyx7zkUA=","dtype":"float64","shape":[61]},"growth_wow":{"__ndarray__":"JRAXak4CIEBfGdvv6BUmQKKBIv6zJiVAInzH54fMIkCKwo5J6CAlQKbtOWJCASNA1cn3yF3FEkDwXj22/yEWQHQWXhohChJAzC/uRfEwEUB4zwsWGE8OQAIEab9jNQVAmFuFjmzFAkAaxulbOgEAQAPqSO/DJfs/mQyqd89wAUB4RN6XVXEBQLiB4dDYmgBAmMQjLLVq/z+zq7Joa0D+P2RFAkQQlP0/XvWeG+i+/T+vTeIznbn0Pw6lP0ePbfI/LQAhlYk68j/uoVXff5/xP6qfcsR2JfE/3wQdGB/O8D+QJe45ZdDwP7MFhX3kzvA/cjgsdJLU8D+frFnEAJDwP0Mx4WdvtPA/eMTZXmuz8D/w2U9IspnwP/BwTr7HhvA/JQ3qocR08D+TUJcIRmjwP8cNTj4PUvA/pbuqtvkw8D8cobbfECfwP/shxrkWIfA/cbMpytMa8D/CBxrSHxPwP00NSZXBC/A/0BwgjIEH8D+dV7RdQwXwP1anmVRTA/A/UjPthFsC8D9ZrKm9oQHwP0WtXO4lAfA/PB6ZkNgA8D/ZLxeumgDwPzfYc81cAPA/pwGv7h4A8D9IG5HuHgDwP5GaOXcPAPA/kZo5dw8A8D+Rmjl3DwDwP5GaOXcPAPA/kZo5dw8A8D8=","dtype":"float64","shape":[61]},"label":["China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei","China: Hubei"]},"selected":{"id":"132487","type":"Selection"},"selection_policy":{"id":"132512","type":"UnionRenderers"}},"id":"132486","type":"ColumnDataSource"},{"attributes":{"source":{"id":"132532","type":"ColumnDataSource"}},"id":"132539","type":"CDSView"},{"attributes":{"line_alpha":0.2,"line_color":"#1f77b4","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132491","type":"Line"},{"attributes":{},"id":"132677","type":"Selection"},{"attributes":{"data_source":{"id":"132595","type":"ColumnDataSource"},"glyph":{"id":"132598","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132600","type":"Line"},"nonselection_glyph":{"id":"132599","type":"Line"},"selection_glyph":null,"view":{"id":"132602","type":"CDSView"}},"id":"132601","type":"GlyphRenderer"},{"attributes":{"label":{"value":"United States: TX"},"renderers":[{"id":"132653","type":"GlyphRenderer"}]},"id":"132675","type":"LegendItem"},{"attributes":{"line_alpha":0.2,"line_color":"#d62728","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132600","type":"Line"},{"attributes":{"data_source":{"id":"132486","type":"ColumnDataSource"},"glyph":{"id":"132489","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132491","type":"Line"},"nonselection_glyph":{"id":"132490","type":"Line"},"selection_glyph":null,"view":{"id":"132493","type":"CDSView"}},"id":"132492","type":"GlyphRenderer"},{"attributes":{"line_alpha":0.1,"line_color":"#9467bd","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132651","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#ff7f0e","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132520","type":"Line"},{"attributes":{"line_alpha":0.2,"line_color":"#2ca02c","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132556","type":"Line"},{"attributes":{"label":{"value":"United States: CA"},"renderers":[{"id":"132601","type":"GlyphRenderer"}]},"id":"132619","type":"LegendItem"},{"attributes":{"source":{"id":"132595","type":"ColumnDataSource"}},"id":"132602","type":"CDSView"},{"attributes":{},"id":"132465","type":"PanTool"},{"attributes":{"line_color":"#ffbb78","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132535","type":"Line"},{"attributes":{"overlay":{"id":"132497","type":"BoxAnnotation"}},"id":"132467","type":"BoxZoomTool"},{"attributes":{},"id":"132737","type":"UnionRenderers"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_multi":null,"active_scroll":"auto","active_tap":"auto","tools":[{"id":"132434","type":"HoverTool"},{"id":"132464","type":"SaveTool"},{"id":"132465","type":"PanTool"},{"id":"132466","type":"WheelZoomTool"},{"id":"132467","type":"BoxZoomTool"},{"id":"132468","type":"ResetTool"}]},"id":"132469","type":"Toolbar"},{"attributes":{"line_alpha":0.1,"line_color":"#ff7f0e","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132519","type":"Line"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"iyKovW8FMECLIqi9bwUwQELaHxwMiEFA0DN8nCcISECn1WC+pgVNQBe7mZnNpVJAtwKZ5GvHUkAaOsyXJRxVQMo7XTW+rV1AxbbkoR+lYEDiIR9nqqlhQOkfhGNalmZABM32zkoEaUB9lb5otW5tQIQn5gvjYXBAxwaMCqU6ckDJNRegdxtzQClf25ARRHVA0KQ/2F9SekCHfdMJr4l8QJNM9QTPiYBAQoJz0M5SgkA=","dtype":"float64","shape":[22]},"growth_wow":{"__ndarray__":"L7rooosuJkDHcRzHcRwbQHIcx3EcxyNAT+zETuzEIkAd1EEd1EEZQA3SIA3SIB1Abm5ubm5uFkARrKPN+xQVQFBxyRCsox1AIlhHm/cpBkACunqArh4QQJms55is5whA4C71ZPx2BUA7sRM7sRMJQDn7A1Jm1QhAVnpqYaWnA0B6gB0l/U4BQCVC58IacQRAWVPWlDWlAkAQCAQCgUACQHe90UMl+wFAQbvhmFLlAUA=","dtype":"float64","shape":[22]},"label":["United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA","United States: WA"]},"selected":{"id":"132677","type":"Selection"},"selection_policy":{"id":"132737","type":"UnionRenderers"}},"id":"132676","type":"ColumnDataSource"},{"attributes":{"source":{"id":"132515","type":"ColumnDataSource"}},"id":"132522","type":"CDSView"},{"attributes":{"data_source":{"id":"132572","type":"ColumnDataSource"},"glyph":{"id":"132575","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132577","type":"Line"},"nonselection_glyph":{"id":"132576","type":"Line"},"selection_glyph":null,"view":{"id":"132579","type":"CDSView"}},"id":"132578","type":"GlyphRenderer"},{"attributes":{"line_alpha":0.1,"line_color":"#d62728","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132599","type":"Line"},{"attributes":{"data_source":{"id":"132647","type":"ColumnDataSource"},"glyph":{"id":"132650","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132652","type":"Line"},"nonselection_glyph":{"id":"132651","type":"Line"},"selection_glyph":null,"view":{"id":"132654","type":"CDSView"}},"id":"132653","type":"GlyphRenderer"},{"attributes":{"source":{"id":"132551","type":"ColumnDataSource"}},"id":"132558","type":"CDSView"},{"attributes":{"line_color":"#1f77b4","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132489","type":"Line"},{"attributes":{"line_alpha":0.1,"line_color":"#98df8a","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132576","type":"Line"},{"attributes":{},"id":"132487","type":"Selection"},{"attributes":{},"id":"132596","type":"Selection"},{"attributes":{"line_color":"#ff9896","line_width":4,"x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132623","type":"Line"},{"attributes":{"dimension":1,"grid_line_color":null,"ticker":{"id":"132460","type":"BasicTicker"}},"id":"132463","type":"Grid"},{"attributes":{"label":{"value":"United States: NY"},"renderers":[{"id":"132626","type":"GlyphRenderer"}]},"id":"132646","type":"LegendItem"},{"attributes":{"data_source":{"id":"132620","type":"ColumnDataSource"},"glyph":{"id":"132623","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"132625","type":"Line"},"nonselection_glyph":{"id":"132624","type":"Line"},"selection_glyph":null,"view":{"id":"132627","type":"CDSView"}},"id":"132626","type":"GlyphRenderer"},{"attributes":{},"id":"132621","type":"Selection"},{"attributes":{},"id":"132644","type":"UnionRenderers"},{"attributes":{},"id":"132592","type":"UnionRenderers"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"7xYaoFTcMEBXwQ4PK6Q1QGqQ8cTC/DpA+wlorGTQQkA/wPrEo9pIQK3ThbKL7FVA54mrBiIIYEB/CeRKjzxxQMGafQa9snpAUpjpHpLPgkAkA8F6pV6JQAkaxLMfxpBARxBaCnmglEBt0YIJdsWYQHvOUUEwbJ5AE5gnbqcFokAeOg5yNwylQKJurgJZ9KdA","dtype":"float64","shape":[18]},"growth_wow":{"__ndarray__":"yEIWspCFLEAppZRSSikrQBvKayivoRtApCYYb2WfG0CpJ+O3Sz0bQDpd5Zn4uCNAL7rooouuJkC7ErUrUVswQCDcXpQcvTNA4ARO4ARONkC6XSsnPJM1QKTVX7rAmDVAzf7zh08bLkBm4MsD5bgoQAxGtIZ1PRxAH37zsNiZFUBXPOTkE+cRQOeeRQkENw5A","dtype":"float64","shape":[18]},"label":["United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY","United States: NY"]},"selected":{"id":"132621","type":"Selection"},"selection_policy":{"id":"132673","type":"UnionRenderers"}},"id":"132620","type":"ColumnDataSource"},{"attributes":{},"id":"132648","type":"Selection"},{"attributes":{"source":{"id":"132620","type":"ColumnDataSource"}},"id":"132627","type":"CDSView"},{"attributes":{"text":"Week-over-week growth rate, selected countries and regions/states","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"132446","type":"Title"},{"attributes":{},"id":"132764","type":"UnionRenderers"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"j7bx8FiqMUBrOWEevAEzQH1oVfEDGDhARBtfysrJPUDBXuPsrkJBQJL5H/BDx0RAQdgwy9+sSkAUytgw7g5QQDDh/y0E+FJAVs0Zr2mrWEBMrSNPL3ddQBzrcm1RHmBAZ75v6WSDYkA=","dtype":"float64","shape":[13]},"growth_wow":{"__ndarray__":"OY7jOI5jE0DaOVizxPgQQLETO7ETOxFAW4YO2O2xEEAMDAwMDAwQQBMweCzv1Q5AMPj0d8dGDkDwDdE/vRYNQCnp7Eej7w9A4uHh4eFhEEA+25BWQqcPQOKHH3744Q1ACPFvVfaCDEA=","dtype":"float64","shape":[13]},"label":["United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA","United States: CA"]},"selected":{"id":"132596","type":"Selection"},"selection_policy":{"id":"132644","type":"UnionRenderers"}},"id":"132595","type":"ColumnDataSource"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"vPe0wpF9M0AI/y948J83QKPk8Qz/wURAf4jK1wX9TEB519vrr1dTQJGs/vdyQFlAssIaqQajYECoDieE+GNkQA2M3XxE9WhAzyKyT0/Pb0C1JJFqKklzQFhjb27PC3dALD+gkGW6ekA=","dtype":"float64","shape":[13]},"growth_wow":{"__ndarray__":"zgSSYzXIGkA54pQXik0YQOryKpfWciBAyJ1rJO6HIUDnzvwNnbEiQM/TE9MxBSNAblhoXKXuIkC+i9OuI70gQEkmbJgq5yBAWF153NGEGEAhd16yF0oVQMRY2tRHEBNAddB2lXnvEEA=","dtype":"float64","shape":[13]},"label":["United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total","United States: total"]},"selected":{"id":"132708","type":"Selection"},"selection_policy":{"id":"132764","type":"UnionRenderers"}},"id":"132707","type":"ColumnDataSource"},{"attributes":{"line_color":"#c5b0d5","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132679","type":"Line"},{"attributes":{"label":{"value":"United States: WA"},"renderers":[{"id":"132682","type":"GlyphRenderer"}]},"id":"132706","type":"LegendItem"},{"attributes":{"callback":null,"data":{"confirmed_per_mn":{"__ndarray__":"YYGBYI4JNEACn5vMrp81QL27z8hCJDpAtr5GbcV3QEBv6rWCUjFFQCNhTBa980pAlC+pqV2zUECQiI5fsypVQMklgcyHElhA","dtype":"float64","shape":[9]},"growth_wow":{"__ndarray__":"LaazmM5iJECrqqqqqmohQNbV1dXV1SFAXXTRRRddIUAp9CcZi2ocQL3QC73QCxhAjITSxjuqE0BoBH564uYQQHLuaEXSzxFA","dtype":"float64","shape":[9]},"label":["United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX","United States: TX"]},"selected":{"id":"132648","type":"Selection"},"selection_policy":{"id":"132704","type":"UnionRenderers"}},"id":"132647","type":"ColumnDataSource"},{"attributes":{"callback":null,"end":25,"reset_end":25,"reset_start":0,"tags":[[["growth_wow","growth_wow",null]]]},"id":"132433","type":"Range1d"},{"attributes":{"axis_label":"confirmed_per_mn","bounds":"auto","formatter":{"id":"132476","type":"PrintfTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"132455","type":"LogTicker"}},"id":"132454","type":"LogAxis"},{"attributes":{},"id":"132460","type":"BasicTicker"},{"attributes":{"source":{"id":"132572","type":"ColumnDataSource"}},"id":"132579","type":"CDSView"},{"attributes":{},"id":"132452","type":"LinearScale"},{"attributes":{"label":{"value":"Spain: total"},"renderers":[{"id":"132578","type":"GlyphRenderer"}]},"id":"132594","type":"LegendItem"},{"attributes":{"num_minor_ticks":10},"id":"132455","type":"LogTicker"},{"attributes":{"callback":null,"renderers":[{"id":"132492","type":"GlyphRenderer"},{"id":"132506","type":"GlyphRenderer"},{"id":"132521","type":"GlyphRenderer"},{"id":"132538","type":"GlyphRenderer"},{"id":"132557","type":"GlyphRenderer"},{"id":"132578","type":"GlyphRenderer"},{"id":"132601","type":"GlyphRenderer"},{"id":"132626","type":"GlyphRenderer"},{"id":"132653","type":"GlyphRenderer"},{"id":"132682","type":"GlyphRenderer"},{"id":"132713","type":"GlyphRenderer"}],"tags":["hv_created"],"tooltips":[["label","@{label}"],["confirmed_per_mn","@{confirmed_per_mn}"],["growth_wow","@{growth_wow}"]]},"id":"132434","type":"HoverTool"},{"attributes":{},"id":"132450","type":"LogScale"},{"attributes":{"grid_line_color":null,"ticker":{"id":"132455","type":"LogTicker"}},"id":"132458","type":"Grid"},{"attributes":{"format":"%dx"},"id":"132477","type":"PrintfTickFormatter"},{"attributes":{"axis_label":"growth_wow","bounds":"auto","formatter":{"id":"132477","type":"PrintfTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"132460","type":"BasicTicker"}},"id":"132459","type":"LinearAxis"},{"attributes":{"format":"%d"},"id":"132476","type":"PrintfTickFormatter"},{"attributes":{"line_color":"#9467bd","x":{"field":"confirmed_per_mn"},"y":{"field":"growth_wow"}},"id":"132650","type":"Line"}],"root_ids":["132445"]},"title":"Bokeh Application","version":"1.4.0"}};
+  var render_items = [{"docid":"b0c8ff87-6492-4438-96f5-038c78711280","roots":{"132445":"d8566019-2304-4823-8b44-75312e7ca828"}}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        clearInterval(timer);
+        embed_document(root);
+      } else {
+        attempts++;
+        if (attempts > 100) {
+          clearInterval(timer);
+          console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing");
+        }
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
